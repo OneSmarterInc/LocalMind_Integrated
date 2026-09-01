@@ -1,50 +1,54 @@
-# Welcome to your Expo app 👋
+# LocalMind Frontend 📱💻
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+The frontend for **LocalMind** is a modern, responsive React Native & Expo application supporting **Web**, **Android**, and **iOS**.
 
-## Get started
+---
 
-1. Install dependencies
+## 🏗️ Architecture & Organization
 
-   ```bash
-   npm install
-   ```
+- **`app/`**: File-based routes using Expo Router:
+  - `index.tsx`: Document upload & parsing progress
+  - `dashboard.tsx`: Main learning dashboard and quick action cards
+  - `modules.tsx`: Course explorer and chapter breakdown
+  - `learning.tsx`: In-depth module explanation & teaching view
+  - `doubt.tsx`: Persistent doubt chat / conversational assistant
+  - `quiz.tsx`: Micro-module & chapter assessment engine
+  - `progress.tsx`: Learning metrics and progress tracking
+  - `feedback.tsx`: Module feedback and rating scoring
+  - `about.tsx`: System overview & local AI information
+- **`src/`**:
+  - **`components/`**: Navigation bar, headers, sidebar, shell layout (`LocalMindShell`)
+  - **`context/`**: `CourseContext.tsx` providing global state for selected books, active modules, scores, and courses
+  - **`features/`**:
+    - `learning-kit/`: Screens and components for lesson explanations, quizzes, doubt conversations, and summary cards
+    - `module-kit/`: Dashboard, module list, outline cards, and components
+  - **`services/`**:
+    - `api.ts`: API client connecting to the Django backend (auto-resolves `localhost:8000` for web and local network IP for physical mobile devices)
+  - **`theme/`**: Design tokens, colors, and layout constants
 
-2. Start the app
+---
 
-   ```bash
-   npx expo start
-   ```
+## 🚀 Running Locally
 
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
+### 1. Install dependencies
 ```bash
-npm run reset-project
+npm install
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+### 2. Start the Expo bundler
+```bash
+npx expo start
+```
 
-## Learn more
+### 3. Launch options
+- **Web Browser**: Press **`w`** in the terminal (runs on `http://localhost:8081` or `8082`).
+- **Physical Phone**: Open the **Expo Go** app on your phone and scan the QR code displayed in the terminal (ensure phone and PC are on the same Wi-Fi network).
+- **Android Emulator**: Press **`a`** (requires Android Studio / emulator).
 
-To learn more about developing your project with Expo, look at the following resources:
+---
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+## ⚙️ Backend Connection
 
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+The frontend connects to the backend REST API via [`src/services/api.ts`](./src/services/api.ts):
+- For web browsers: defaults to `http://localhost:8000/api`
+- For mobile devices (Expo Go): dynamically resolves the host machine's IP address (`http://<your-local-ip>:8000/api`).
