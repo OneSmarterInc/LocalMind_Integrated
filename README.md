@@ -18,7 +18,6 @@ This project is organized as a clean and structured monorepo containing both the
 │   ├── config/               # Django project-wide configuration (settings, routes)
 │   ├── media/                # Uploaded documents (not committed)
 │   ├── db.sqlite3            # SQLite database file (ignored in git)
-│   ├── API_REFERENCE.md      # Backend API specifications & endpoints
 │   └── README.md             # Backend setup & testing instructions
 │
 └── frontend/                 # Expo React Native application
