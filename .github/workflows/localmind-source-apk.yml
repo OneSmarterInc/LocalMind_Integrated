@@ -1,0 +1,147 @@
+name: Build source-truth LocalMind Android APK
+
+on:
+  push:
+    branches:
+      - localmind-rn-apk-20260904
+    paths:
+      - .ci-trigger-localmind-rn
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CI: "1"
+      EXPO_PUBLIC_API_URL: "http://192.168.1.10:8000/api/"
+      LOCALMIND_ALLOW_CLEARTEXT: "true"
+    steps:
+      - name: Checkout build branch
+        uses: actions/checkout@v4
+
+      - name: Restore inspected source-truth frontend
+        shell: bash
+        run: |
+          cat .ci/localmind-rn/part*.b64 > /tmp/localmind-frontend.tar.xz.b64
+          base64 --decode /tmp/localmind-frontend.tar.xz.b64 > /tmp/localmind-frontend.tar.xz
+          echo "42be22b2ce944c8f2896b468a09de241c787ca3ed382c6c2af046bee91a3ea18  /tmp/localmind-frontend.tar.xz" | sha256sum --check
+          rm -rf frontend/app frontend/src frontend/scripts frontend/android frontend/ios
+          rm -f frontend/package.json frontend/package-lock.json frontend/app.json frontend/app.config.js frontend/tsconfig.json frontend/eslint.config.js
+          tar -xJf /tmp/localmind-frontend.tar.xz -C frontend
+          test -f frontend/app/login/index.tsx
+          test -f frontend/src/auth/AuthContext.tsx
+          test -f frontend/src/api/client.ts
+          test -f frontend/assets/images/icon.png
+          echo "7165a53c7475d846df195bc570482459d61bad67" > /tmp/expected-icon-git-blob
+          printf 'blob %s\0' "$(wc -c < frontend/assets/images/icon.png)" | cat - frontend/assets/images/icon.png | sha1sum | awk '{print $1}' > /tmp/actual-icon-git-blob
+          diff -u /tmp/expected-icon-git-blob /tmp/actual-icon-git-blob
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.4
+          cache: npm
+          cache-dependency-path: frontend/package.json
+
+      - name: Install exact top-level frontend dependencies
+        working-directory: frontend
+        run: npm install --no-audit --no-fund
+
+      - name: TypeScript validation
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: ESLint validation
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Generate native Android project from existing Expo application
+        working-directory: frontend
+        run: npx expo prebuild --platform android --clean --no-install
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Build Metro-independent release APK
+        working-directory: frontend/android
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace :app:assembleRelease
+
+      - name: Verify APK contents, package and signature
+        shell: bash
+        run: |
+          APK=frontend/android/app/build/outputs/apk/release/app-release.apk
+          test -s "$APK"
+          unzip -tq "$APK"
+          unzip -l "$APK" | tee apk-contents.txt
+          grep -Eq 'assets/(index.android.bundle|.*\.hbc)' apk-contents.txt
+          grep -q 'lib/arm64-v8a/' apk-contents.txt
+          cp "$APK" LocalMind-LAN-release.apk
+          sha256sum LocalMind-LAN-release.apk | tee LocalMind-LAN-release.apk.sha256
+          BUILD_TOOLS="${ANDROID_HOME}/build-tools/$(ls "${ANDROID_HOME}/build-tools" | sort -V | tail -1)"
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs LocalMind-LAN-release.apk | tee apk-signing.txt
+          "$BUILD_TOOLS/aapt" dump badging LocalMind-LAN-release.apk | tee apk-badging.txt
+          grep -q "package: name='com.onesmarter.localmind'" apk-badging.txt
+          grep -q "launchable-activity: name='com.onesmarter.localmind.MainActivity'" apk-badging.txt
+
+      - name: Upload verified APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: LocalMind-source-truth-release
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            LocalMind-LAN-release.apk
+            LocalMind-LAN-release.apk.sha256
+            apk-signing.txt
+            apk-badging.txt
+            apk-contents.txt
+
+  launch-smoke:
+    needs: build-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Download verified release APK
+        uses: actions/download-artifact@v4
+        with:
+          name: LocalMind-source-truth-release
+
+      - name: Install release APK and verify the real first screen
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 33
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: |
+            adb install -r LocalMind-LAN-release.apk
+            adb shell am force-stop com.onesmarter.localmind
+            adb shell am start -W -n com.onesmarter.localmind/.MainActivity | tee launch.txt
+            sleep 15
+            test -n "$(adb shell pidof com.onesmarter.localmind)"
+            adb shell uiautomator dump /sdcard/localmind-window.xml
+            adb pull /sdcard/localmind-window.xml localmind-window.xml
+            adb exec-out screencap -p > localmind-first-screen.png
+            grep -q 'Choose your portal' localmind-window.xml
+
+      - name: Upload launch evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: LocalMind-source-truth-launch-smoke
+          retention-days: 14
+          path: |
+            launch.txt
+            localmind-window.xml
+            localmind-first-screen.png
