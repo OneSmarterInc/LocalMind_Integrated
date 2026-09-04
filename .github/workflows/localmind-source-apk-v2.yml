@@ -1,0 +1,226 @@
+name: Build source LocalMind USB Android APK
+
+on:
+  push:
+    branches:
+      - localmind-rn-apk-20260904
+    paths:
+      - .ci-trigger-localmind-v2
+      - .github/workflows/localmind-source-apk-v2.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CI: "1"
+      NODE_ENV: production
+      EXPO_PUBLIC_API_URL: "http://127.0.0.1:8000/api/"
+      LOCALMIND_ALLOW_CLEARTEXT: "true"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Apply the physical-device API URL fix
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          client = Path('frontend/src/api/client.ts')
+          if not client.exists():
+              raise SystemExit('frontend/src/api/client.ts was not found')
+
+          text = client.read_text()
+          marker = '// LOCALMIND_USB_API_OVERRIDE: explicit EXPO_PUBLIC_API_URL is never rewritten.'
+          patched = marker in text
+
+          if not patched:
+              pos = text.find('10.0.2.2')
+              if pos >= 0:
+                  before = text[:pos]
+                  candidates = [
+                      (r"Platform\.OS\s*===\s*'android'", "Platform.OS === 'android' && !process.env.EXPO_PUBLIC_API_URL?.trim()"),
+                      (r'Platform\.OS\s*===\s*"android"', 'Platform.OS === "android" && !process.env.EXPO_PUBLIC_API_URL?.trim()'),
+                  ]
+                  best = None
+                  for pattern, replacement in candidates:
+                      matches = list(re.finditer(pattern, before))
+                      if matches:
+                          match = matches[-1]
+                          if pos - match.end() < 1800 and (best is None or match.start() > best[0].start()):
+                              best = (match, replacement)
+                  if best:
+                      match, replacement = best
+                      text = text[:match.start()] + replacement + text[match.end():]
+                      patched = True
+
+              if not patched and '10.0.2.2' in text:
+                  assignment = re.search(
+                      r'(?P<prefix>(?:export\s+)?const\s+(?P<name>[A-Za-z_$][\w$]*)\s*=)'
+                      r'(?P<expr>[\s\S]{0,1200}?10\.0\.2\.2[\s\S]{0,1200}?);',
+                      text,
+                  )
+                  if assignment:
+                      expression = assignment.group('expr').strip()
+                      replacement = (
+                          f"{assignment.group('prefix')}\n"
+                          f"  process.env.EXPO_PUBLIC_API_URL?.trim() || ({expression});"
+                      )
+                      text = text[:assignment.start()] + replacement + text[assignment.end():]
+                      patched = True
+
+              if not patched and 'EXPO_PUBLIC_API_URL' in text and '10.0.2.2' not in text:
+                  patched = True
+
+              if not patched:
+                  raise SystemExit('Could not safely identify the Android API URL resolver')
+
+              lines = text.splitlines(True)
+              insertion = 0
+              for index, line in enumerate(lines):
+                  if line.lstrip().startswith('import '):
+                      insertion = index + 1
+              lines.insert(insertion, '\n' + marker + '\n')
+              text = ''.join(lines)
+              client.write_text(text)
+
+          if 'EXPO_PUBLIC_API_URL' not in text:
+              raise SystemExit('Configurable API URL is absent after patching')
+          if '10.0.2.2' in text and not any(token in text for token in (
+              '!process.env.EXPO_PUBLIC_API_URL',
+              'EXPO_PUBLIC_API_URL?.trim() ||',
+              'explicitApiUrl',
+          )):
+              raise SystemExit('Emulator rewrite is still unconditional')
+
+          for manifest in Path('frontend/android/app/src').glob('*/AndroidManifest.xml'):
+              source = manifest.read_text()
+              if '<application' in source and 'usesCleartextTraffic' not in source:
+                  manifest.write_text(source.replace(
+                      '<application',
+                      '<application android:usesCleartextTraffic="true"',
+                      1,
+                  ))
+          PY
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.4
+          cache: npm
+          cache-dependency-path: frontend/package.json
+
+      - name: Install JavaScript dependencies
+        working-directory: frontend
+        shell: bash
+        run: |
+          if [[ -f package-lock.json ]]; then
+            npm ci --no-audit --no-fund
+          else
+            npm install --no-audit --no-fund
+          fi
+
+      - name: TypeScript diagnostic
+        continue-on-error: true
+        working-directory: frontend
+        shell: bash
+        run: npx tsc --noEmit 2>&1 | tee ../typecheck.txt
+
+      - name: ESLint diagnostic
+        continue-on-error: true
+        working-directory: frontend
+        shell: bash
+        run: npm run lint 2>&1 | tee ../eslint.txt
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Build bundled release APK
+        working-directory: frontend/android
+        shell: bash
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace clean :app:assembleRelease
+
+      - name: Verify APK contents, package, activity, and signature
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=frontend/android/app/build/outputs/apk/release/app-release.apk
+          test -s "$APK"
+          unzip -tq "$APK"
+          unzip -l "$APK" | tee apk-contents.txt
+          grep -Eq 'assets/(index.android.bundle|.*\.hbc)' apk-contents.txt
+          grep -q 'lib/arm64-v8a/' apk-contents.txt
+          cp "$APK" LocalMind-USB-release.apk
+          sha256sum LocalMind-USB-release.apk | tee LocalMind-USB-release.apk.sha256
+          BUILD_TOOLS="${ANDROID_HOME}/build-tools/$(ls "${ANDROID_HOME}/build-tools" | sort -V | tail -1)"
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs LocalMind-USB-release.apk | tee apk-signing.txt
+          "$BUILD_TOOLS/aapt" dump badging LocalMind-USB-release.apk | tee apk-badging.txt
+          grep -q "package: name='com.onesmarter.localmind'" apk-badging.txt
+          grep -q "launchable-activity: name='com.onesmarter.localmind.MainActivity'" apk-badging.txt
+
+      - name: Upload verified APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: LocalMind-USB-release-v2
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            LocalMind-USB-release.apk
+            LocalMind-USB-release.apk.sha256
+            apk-signing.txt
+            apk-badging.txt
+            apk-contents.txt
+            typecheck.txt
+            eslint.txt
+
+  launch-smoke:
+    needs: build-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Download release APK
+        uses: actions/download-artifact@v4
+        with:
+          name: LocalMind-USB-release-v2
+
+      - name: Install and validate first screen on Android 13
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 33
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: |
+            adb install -r LocalMind-USB-release.apk
+            adb shell am force-stop com.onesmarter.localmind
+            adb shell am start -W -n com.onesmarter.localmind/.MainActivity | tee launch.txt
+            sleep 15
+            test -n "$(adb shell pidof com.onesmarter.localmind)"
+            adb shell uiautomator dump /sdcard/localmind-window.xml
+            adb pull /sdcard/localmind-window.xml localmind-window.xml
+            adb exec-out screencap -p > localmind-first-screen.png
+            grep -q 'Choose your portal' localmind-window.xml
+
+      - name: Upload launch evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: LocalMind-launch-smoke-v2
+          retention-days: 14
+          path: |
+            launch.txt
+            localmind-window.xml
+            localmind-first-screen.png
