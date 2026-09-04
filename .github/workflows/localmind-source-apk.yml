@@ -35,11 +35,7 @@ jobs:
           test -f frontend/app/login/index.tsx
           test -f frontend/src/auth/AuthContext.tsx
           test -f frontend/src/api/client.ts
-          test -f frontend/android/app/src/main/AndroidManifest.xml
-          test -f frontend/android/app/src/debug/AndroidManifest.xml
           test -f frontend/assets/images/icon.png
-          ! grep -q 'SYSTEM_ALERT_WINDOW' frontend/android/app/src/main/AndroidManifest.xml
-          grep -q 'SYSTEM_ALERT_WINDOW' frontend/android/app/src/debug/AndroidManifest.xml
           echo "7165a53c7475d846df195bc570482459d61bad67" > /tmp/expected-icon-git-blob
           printf 'blob %s\0' "$(wc -c < frontend/assets/images/icon.png)" | cat - frontend/assets/images/icon.png | sha1sum | awk '{print $1}' > /tmp/actual-icon-git-blob
           diff -u /tmp/expected-icon-git-blob /tmp/actual-icon-git-blob
@@ -49,11 +45,11 @@ jobs:
         with:
           node-version: 20.19.4
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: frontend/package.json
 
       - name: Install exact frontend dependencies
         working-directory: frontend
-        run: npm ci --no-audit --no-fund
+        run: npm install --no-audit --no-fund
 
       - name: TypeScript validation
         working-directory: frontend
@@ -63,6 +59,28 @@ jobs:
         working-directory: frontend
         run: npm run lint
 
+      - name: Generate native Android project from the inspected Expo application
+        working-directory: frontend
+        run: npx expo prebuild --platform android --clean --no-install
+
+      - name: Remove development-only overlay permission from release manifest
+        working-directory: frontend
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          manifest = Path('android/app/src/main/AndroidManifest.xml')
+          original = manifest.read_text(encoding='utf-8')
+          cleaned = '\n'.join(
+              line for line in original.splitlines()
+              if 'android.permission.SYSTEM_ALERT_WINDOW' not in line
+          ) + '\n'
+          if cleaned == original:
+              raise SystemExit('Expected development overlay permission was not present in generated main manifest')
+          manifest.write_text(cleaned, encoding='utf-8')
+          PY
+          ! grep -q 'SYSTEM_ALERT_WINDOW' android/app/src/main/AndroidManifest.xml
+
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
@@ -70,11 +88,11 @@ jobs:
           java-version: "17"
           cache: gradle
 
-      - name: Build existing native project as a Metro-independent release APK
+      - name: Build Metro-independent release APK
         working-directory: frontend/android
         run: |
           chmod +x gradlew
-          ./gradlew --no-daemon --stacktrace :app:assembleRelease -PlocalMindAllowCleartext=true
+          ./gradlew --no-daemon --stacktrace :app:assembleRelease
 
       - name: Verify APK contents, package, permissions and signature
         shell: bash
