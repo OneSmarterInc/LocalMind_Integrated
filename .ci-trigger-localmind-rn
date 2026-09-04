@@ -1,6 +1,6 @@
 Source-truth Android build trigger
 Date: 2026-09-04
-Revision: exact-existing-native-project-2
+Revision: hardened-final-3
 Archive SHA-256: 42be22b2ce944c8f2896b468a09de241c787ca3ed382c6c2af046bee91a3ea18
 Embedded development API URL: http://192.168.1.10:8000/api/
 Required verification: compiled bundle, ARM64, package/activity, signature, INTERNET, no release SYSTEM_ALERT_WINDOW, Android 13 launch screen
